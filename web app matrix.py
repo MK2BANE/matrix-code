@@ -16,7 +16,7 @@ class Settings:
     pan_x = 0
     pan_y = 0
     hue = 120
-    # [BG, MID, FG] - 1 is clear, 100 is max trails
+    # Higher number (e.g., 60) = SHORTER trails. Lower (e.g., 10) = LONGER trails.
     layer_fades = [40, 40, 40]
     layer_speeds = [1.0, 1.0, 1.0]
     densities = [300, 150, 40]
@@ -71,17 +71,13 @@ def setup_controls():
         s.pack(side='right')
         return s
 
-    # OPTICS
     s_zoom = create_slider(tab_optics, "ZOOM", 0.1, 10.0, 1.0, 0.1)
     s_hue = create_slider(tab_optics, "HUE", 0, 360, 120)
-    tk.Label(tab_optics, text="--- TRAIL LENGTH (RIGHT = LONGER) ---", font=("Consolas", 8)).pack()
     s_fbg = create_slider(tab_optics, "BG GHOST", 1, 100, 40)
     s_fmid = create_slider(tab_optics, "MID GHOST", 1, 100, 40)
     s_ffg = create_slider(tab_optics, "FG GHOST", 1, 100, 40)
     s_pan_x = create_slider(tab_optics, "PAN X", -2000, 2000, 0);
     s_pan_y = create_slider(tab_optics, "PAN Y", -2000, 2000, 0)
-
-    # PHYSICS / DENSITY
     s_vbg = create_slider(tab_physics, "BG SPD", 0.1, 5.0, 1.0, 0.1)
     s_vmid = create_slider(tab_physics, "MID SPD", 0.1, 5.0, 1.0, 0.1)
     s_vfg = create_slider(tab_physics, "FG SPD", 0.1, 5.0, 1.0, 0.1)
@@ -89,7 +85,6 @@ def setup_controls():
     s_dmid = create_slider(tab_density, "MID QTY", 0, 500, 150)
     s_dfg = create_slider(tab_density, "FG QTY", 0, 200, 40)
 
-    # PRESETS
     current_presets = load_presets()
     preset_entry = ttk.Entry(tab_presets, width=30);
     preset_entry.pack(pady=5)
@@ -140,9 +135,9 @@ WIDTH, HEIGHT = 1280, 720
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 chars = [str(i) for i in range(10)] + [chr(i) for i in range(0xFF66, 0xFF9D)]
 
-# Create 3 persistent surfaces (one for each layer)
-layer_surfaces = [pygame.Surface((WIDTH, HEIGHT)) for _ in range(3)]
-for s in layer_surfaces: s.fill((0, 0, 0))
+# 3 persistent canvases to hold the trails for each layer
+layer_canvases = [pygame.Surface((WIDTH, HEIGHT)) for _ in range(3)]
+for canvas in layer_canvases: canvas.fill((0, 0, 0))
 
 layers_config = [{"depth": 0.4}, {"depth": 1.0}, {"depth": 1.8}]
 MAX_POOL = 1000
@@ -168,8 +163,9 @@ while settings.running:
         if event.type == pygame.QUIT: settings.running = False
         if event.type == pygame.VIDEORESIZE:
             WIDTH, HEIGHT = event.w, event.h
-            layer_surfaces = [pygame.Surface((WIDTH, HEIGHT)) for _ in range(3)]
+            layer_canvases = [pygame.Surface((WIDTH, HEIGHT)) for _ in range(3)]
 
+    # --- DRAWING SECTION ---
     screen.fill((0, 0, 0))
     color_obj = pygame.Color(0, 0, 0);
     color_obj.hsva = (settings.hue, 100, 100, 100)
@@ -177,13 +173,16 @@ while settings.running:
 
     for idx, config in enumerate(layers_config):
         depth = config["depth"]
-        # THE GHOSTING FIX: Draw a semi-transparent black overlay on the persistent layer surface
-        # Right (100) = Lower value (Longer trails)
-        fade_val = max(1, 110 - settings.layer_fades[idx])
-        fade_overlay = pygame.Surface((WIDTH, HEIGHT))
-        fade_overlay.set_alpha(fade_val)
-        fade_overlay.fill((0, 0, 0))
-        layer_surfaces[idx].blit(fade_overlay, (0, 0))
+        canvas = layer_canvases[idx]
+
+        # --- THE FADE LOGIC FIX ---
+        # Instead of clearing, we blit a semi-transparent surface to fade old frames
+        fade_surface = pygame.Surface((WIDTH, HEIGHT))
+        # 101 - fade because high slider = longer trails (lower alpha)
+        fade_intensity = max(1, 101 - settings.layer_fades[idx])
+        fade_surface.set_alpha(fade_intensity)
+        fade_surface.fill((0, 0, 0))
+        canvas.blit(fade_surface, (0, 0))
 
         cur_size = max(3, int(settings.base_font_size * settings.current_zoom * depth))
         font = pygame.font.SysFont("ms mincho", cur_size)
@@ -191,18 +190,23 @@ while settings.running:
         f_color = (int(primary_color[0] * dim), int(primary_color[1] * dim), int(primary_color[2] * dim))
 
         for i in range(min(settings.densities[idx], MAX_POOL)):
+            # Horizontal wrap & Vertical wrap
             draw_x = ((layer_drops[idx][i][2] * WIDTH) + (settings.pan_x * depth)) % WIDTH
             draw_y = (layer_drops[idx][i][0] + (settings.pan_y * depth)) % (HEIGHT + cur_size * 2) - cur_size
 
-            # Lead character is white
+            # Draw random characters
+            char = random.choice(chars)
             color = (255, 255, 255) if random.random() > 0.98 else f_color
-            layer_surfaces[idx].blit(font.render(random.choice(chars), True, color), (draw_x, int(draw_y)))
+            canvas.blit(font.render(char, True, color), (draw_x, int(draw_y)))
+
+            # Update physics
             layer_drops[idx][i][0] += layer_drops[idx][i][1] * settings.layer_speeds[
                 idx] * settings.current_zoom * depth
 
-        # Combine layers onto main screen
-        screen.blit(layer_surfaces[idx], (0, 0), special_flags=pygame.BLEND_ADD)
+        # Combine the layer canvas onto the main screen
+        screen.blit(canvas, (0, 0), special_flags=pygame.BLEND_ADD)
 
     pygame.display.flip()
     clock.tick(60)
+
 pygame.quit()
